@@ -623,12 +623,13 @@ public:
 class WriteKernelWrapper
 {
 private:
-    ofstream& m_outFile;
+    ofstream& m_outSourceFile;
+    ofstream& m_outHeaderFile;
     string&   m_getProgramName;
     WriteKernelWrapper& operator = (const WriteKernelWrapper&) {return *this;} // unused, removes compile warning
 public:
-    WriteKernelWrapper(ofstream& outFile, string& in_getProgramName) :
-      m_outFile(outFile), m_getProgramName(in_getProgramName) {}
+    WriteKernelWrapper(ofstream& outSourceFile, ofstream& outHeaderFile, string& in_getProgramName) :
+        m_outSourceFile(outSourceFile), m_outHeaderFile(outHeaderFile), m_getProgramName(in_getProgramName) {}
     void operator() (const KernelStrings& in_kernelStrings)
     {
         const string& kernelName = in_kernelStrings.m_kernelName;
@@ -639,7 +640,7 @@ public:
         string enqueueName = CLU_PREFIX_ENQUEUE + kernelName;
 
         // definition of custom structure for kernel
-        m_outFile <<
+        m_outHeaderFile <<
             "/* object that associates specific cl_kernel with its wrapper code */" << endl <<
             "typedef struct _" << structName << endl <<
             "{" << endl <<
@@ -647,10 +648,14 @@ public:
             "    cl_program m_program; /* DO NOT clReleaseProgram */" << endl <<
             "} " << structName << ";" << endl << endl;
 
-        // custom function to get "object" containing structure and pointer to enqueue function
-        m_outFile <<
+        m_outHeaderFile <<
             "/* function to initialize structure and create kernel from source */" << endl <<
-            "INLINE " << structName << " " << createName << "(cl_int * errcode_ret)" << endl <<
+            "" << structName << " " << createName << "(cl_int * errcode_ret);" << endl << endl;
+
+        // custom function to get "object" containing structure and pointer to enqueue function
+        m_outSourceFile <<
+            "/* function to initialize structure and create kernel from source */" << endl <<
+            structName << " " << createName << "(cl_int * errcode_ret)" << endl <<
             "{"                                                      << endl <<
             "    cl_int status;"                                     << endl <<
             "    " << structName << " s;"                            << endl <<
@@ -675,27 +680,30 @@ public:
         }
         parameters += ")";
 
-        m_outFile <<
-            "INLINE cl_int " << enqueueName << parameters << endl <<
+        m_outHeaderFile <<
+            "cl_int " << enqueueName << parameters << ";" << endl << endl;
+
+        m_outSourceFile <<
+            "cl_int " << enqueueName << parameters << endl <<
             "{" << endl <<
             "    cl_uint status = CL_SUCCESS;" << endl;
 
         for (unsigned int i = 0; i < kernelParams.size(); i++)
         {
-            m_outFile <<
+            m_outSourceFile <<
                 "    status = clSetKernelArg(s.m_kernel, " << i << ", ";
             if (true == kernelParams[i].m_isLocal)
             {
-                m_outFile << kernelParams[i].m_name << ", 0);" << endl;
+                m_outSourceFile << kernelParams[i].m_name << ", 0);" << endl;
             }
             else
             {
-                m_outFile << "sizeof(" << kernelParams[i].m_type << "), &" << kernelParams[i].m_name << ");" << endl;
+                m_outSourceFile << "sizeof(" << kernelParams[i].m_type << "), &" << kernelParams[i].m_name << ");" << endl;
             }
-            m_outFile << "    if (CL_SUCCESS != status) return status;" << endl;
+            m_outSourceFile << "    if (CL_SUCCESS != status) return status;" << endl;
         }
 
-        m_outFile <<
+        m_outSourceFile <<
             "    status = cluEnqueue(s.m_kernel, params);" << endl <<
             "    return status;" << endl <<
             "}" << endl << endl;
@@ -709,12 +717,13 @@ public:
 class WriteCPPKernelWrapper
 {
 private:
-    ofstream& m_outFile;
+    ofstream& m_outSourceFile;
+    ofstream& m_outHeaderFile;
     string&   m_getProgramName;
     WriteCPPKernelWrapper& operator = (const WriteCPPKernelWrapper&) {return *this;} // unused, removes compile warning
 public:
-    WriteCPPKernelWrapper(ofstream& outFile, string& in_getProgramName) :
-      m_outFile(outFile), m_getProgramName(in_getProgramName) {}
+    WriteCPPKernelWrapper(ofstream& outSourceFile, ofstream& outHeaderFile, string& in_getProgramName) :
+        m_outSourceFile(outSourceFile), m_outHeaderFile(outHeaderFile), m_getProgramName(in_getProgramName) {}
     void operator() (const KernelStrings& in_kernelStrings)
     {
         const string& kernelName = in_kernelStrings.m_kernelName;
@@ -723,39 +732,52 @@ public:
         string structName  = CLU_PREFIX "_" + kernelName;
         string createName  = CLU_PREFIX_CREATE + kernelName;
 
-        // Output function to return std::function wrapper
-        m_outFile << 
+        // make heade entry
+        m_outHeaderFile <<
             "std::function<cl::Event (";
-        m_outFile << endl << "    cl::EnqueueArgs&";
+        m_outHeaderFile << endl << "    cl::EnqueueArgs&";
         // Output param type list
         for (unsigned int i = 0; i < kernelParams.size(); i++)
         {
             std::string paramType(kernelParams[i].m_type);
-            m_outFile << ", " << endl << "    " << paramType;
+            m_outHeaderFile << ", " << endl << "    " << paramType;
         }
-        m_outFile << endl <<
-            "    )> " << endl << createName << "(cl::Context creationContext = cl::Context::getDefault()) " << endl << "{" << endl;
-        m_outFile << 
+        m_outHeaderFile << endl <<
+            "    )> " << endl << createName << "(cl::Context creationContext = cl::Context::getDefault());" << endl << endl;
+
+        // Output function to return std::function wrapper
+        m_outSourceFile << 
+            "std::function<cl::Event (";
+        m_outSourceFile << endl << "    cl::EnqueueArgs&";
+        // Output param type list
+        for (unsigned int i = 0; i < kernelParams.size(); i++)
+        {
+            std::string paramType(kernelParams[i].m_type);
+            m_outSourceFile << ", " << endl << "    " << paramType;
+        }
+        m_outSourceFile << endl <<
+            "    )> " << endl << createName << "(cl::Context creationContext) " << endl << "{" << endl;
+        m_outSourceFile << 
             "    std::function<cl::Event (";
-        m_outFile << endl << "        cl::EnqueueArgs&";
+        m_outSourceFile << endl << "        cl::EnqueueArgs&";
         // Output param type list
         for (unsigned int i = 0; i < kernelParams.size(); i++)
         {
             std::string paramType(kernelParams[i].m_type);
-            m_outFile << ", " << endl << "        " << paramType;
+            m_outSourceFile << ", " << endl << "        " << paramType;
         }
-        m_outFile << ")> " << endl << "        kernelFunctor(cl::make_kernel<";
+        m_outSourceFile << ")> " << endl << "        kernelFunctor(cl::make_kernel<";
         // Output param type list for the make_kernel entity.
         for (unsigned int i = 0; i < kernelParams.size(); i++)
         {
             std::string paramType(kernelParams[i].m_type);
-            m_outFile << endl << "            " << paramType;
+            m_outSourceFile << endl << "            " << paramType;
             if( i < (kernelParams.size() - 1) ) {
-                m_outFile << ", ";
+                m_outSourceFile << ", ";
             }
         }
-        m_outFile << ">" << endl << "            (" << m_getProgramName << "(creationContext), \"" << kernelName << "\"));" << endl; 
-        m_outFile << "    return kernelFunctor;" << endl << "}" << endl << endl;
+        m_outSourceFile << ">" << endl << "            (" << m_getProgramName << "(creationContext), \"" << kernelName << "\"));" << endl; 
+        m_outSourceFile << "    return kernelFunctor;" << endl << "}" << endl << endl;
 
         // custom function for enqueue of kernel
         // create parameter string
@@ -827,11 +849,31 @@ public:
 };
 
 //------------------------------------------------------------------------
+// Extract just the file name.
+//------------------------------------------------------------------------
+string FileName(const string& fullPathFileName)
+{
+    string name(fullPathFileName);
+
+    size_t index = name.find_last_of("\\");
+    if (string::npos != index)
+        name.erase(0, index + 1);
+
+    index = name.find_last_of(".");
+    if (string::npos != index)
+        name.erase(index);
+
+    return name;
+}
+
+//------------------------------------------------------------------------
 // write stringified cl source wrapped in function that also builds it
 //------------------------------------------------------------------------
-void GenerateWrappers(const string& in_inFileName, const string& in_outFileName,
-    const StringList& in_includePaths)
+void GenerateWrappers(const string& in_inFileName, const string& in_outPath, const StringList& in_includePaths)
 {
+    string outHeaderFileName = in_inFileName + ".h";
+    string outSourceFileName = in_inFileName + ".cpp";
+
     // read the whole source file in as a single string
     ifstream inFile(in_inFileName.c_str());
     if (!inFile.is_open())
@@ -850,21 +892,31 @@ void GenerateWrappers(const string& in_inFileName, const string& in_outFileName,
     // recursively search all included files
     ProcessSource(src, in_includePaths, sources, kernels);
 
-    string header = GetHeader(in_outFileName);
-    string getProgramName = CLU_PREFIX "Get_" + header;
+    string header = GetHeader(outHeaderFileName);
 
-    ofstream outFile(in_outFileName.c_str());
-    if (!outFile.is_open())
+    string getProgramName = CLU_PREFIX "Get_" + FileName(in_inFileName);
+
+    ofstream outSourceFile(outSourceFileName.c_str());
+    if (!outSourceFile.is_open())
     {
         string error("File could not be opened for writing: ");
-        error += in_outFileName;
+        error += outSourceFileName;
+        ReturnError(error);
+    }
+
+    ofstream outHeaderFile(outHeaderFileName.c_str());
+    if (!outHeaderFile.is_open())
+    {
+        string error("File could not be opened for writing: ");
+        error += outHeaderFileName;
         ReturnError(error);
     }
 
     // helpful comments
     if( g_generateCPP ) 
     {
-        outFile <<
+        stringstream commentsCPP;
+        commentsCPP <<
             "/* CLU GENERATED */" << endl <<
             "/* All structures and functions generated by CLU start with " << CLU_PREFIX << " */" << endl <<
             "/*" << endl <<
@@ -873,11 +925,17 @@ void GenerateWrappers(const string& in_inFileName, const string& in_outFileName,
             "    kernelFunctorName(" << endl <<
             "        cl::EnqueueArgs(cl::NDRange(numElements), cl::NDRange(numElements)), ...);" << endl << endl <<
             "Exports:" << endl;
-        for_each(kernels.begin(), kernels.end(), WriteCPPExports(outFile));
+
+        outSourceFile << commentsCPP.str();
+        outHeaderFile << commentsCPP.str();
+
+        for_each(kernels.begin(), kernels.end(), WriteCPPExports(outSourceFile));
+        for_each(kernels.begin(), kernels.end(), WriteCPPExports(outHeaderFile));
     }
     else 
     {
-        outFile <<
+        stringstream commentsC;
+        commentsC <<
             "/* CLU GENERATED */" << endl <<
             "/* All structures and functions generated by CLU start with " << CLU_PREFIX << " */" << endl <<
             "/*" << endl <<
@@ -887,71 +945,95 @@ void GenerateWrappers(const string& in_inFileName, const string& in_outFileName,
             "    params.nd_range = CLU_ND1(bufferLength);" << endl <<
             "    status = " CLU_PREFIX_ENQUEUE "MyKernel(s, &params, ...);" << endl << endl <<
             "Exports:" << endl;
-            for_each(kernels.begin(), kernels.end(), WriteExports(outFile));
+
+        outSourceFile << commentsC.str();
+        outHeaderFile << commentsC.str();
+
+        for_each(kernels.begin(), kernels.end(), WriteExports(outSourceFile));
+        for_each(kernels.begin(), kernels.end(), WriteExports(outHeaderFile));
     }
 
 
-    outFile <<
+    outSourceFile <<
         "*/" << endl << endl;
 
-    
+    outHeaderFile <<
+        "*/" << endl << endl;
+
     // #pragma once
     if( g_generateCPP ) 
     {
-        outFile <<
-            "#include <CL/cl.hpp>" << endl <<
-            "#include <functional>" << endl <<
+        outSourceFile <<
+            "#include \"" << FileName(outHeaderFileName) << ".h\"" << endl << endl;
+
+        outHeaderFile <<
             "#ifndef __" << header.c_str() << endl <<
-            "#define __" << header.c_str() << endl << endl;
+            "#define __" << header.c_str() << endl << endl <<
+            "#include <CL/cl.hpp>" << endl <<
+            "#include <functional>" << endl << endl;
 
         // function to build program from stringified sources
-        outFile <<
+        outSourceFile <<
             "cl::Program " << getProgramName << "(const cl::Context &creationContext)" << endl <<
             "{" << endl <<
             "    static const char* src[" << sources.size() << "] = {";
+        outHeaderFile <<
+            "cl::Program " << getProgramName << "(const cl::Context &creationContext);" << endl << endl;
 
-        for_each(sources.begin(), sources.end(), WriteSourceString(outFile));
 
-        outFile << endl <<
+        for_each(sources.begin(), sources.end(), WriteSourceString(outSourceFile));
+
+        outSourceFile << endl <<
             "    };" << endl;
             // TODO: Expand to make this accept more than one source string
 
-        outFile << "    cl::Program::Sources sourceList;" << endl;
+        outSourceFile << "    cl::Program::Sources sourceList;" << endl;
         for( unsigned int i = 0; i < sources.size(); ++i ) {
-            outFile << "    sourceList.push_back(" << endl <<
+            outSourceFile << "    sourceList.push_back(" << endl <<
                 "        std::pair<const char*, ::size_t>(src[" << i << "], strlen(src[" << i << "]))";
             if( i < (sources.size() - 1) ) {
-                outFile << ", " << endl;
+                outSourceFile << ", " << endl;
             }
         }
-        outFile << ");" << endl;
-        outFile <<
+        outSourceFile << ");" << endl;
+        outSourceFile <<
             "    cl::Program program = cl::Program(creationContext, sourceList);" << endl <<
             "    program.build();" << endl <<
             "    return program;" << endl <<
             "}" << endl << endl;
 
-        for_each(kernels.begin(), kernels.end(), WriteCPPKernelWrapper(outFile, getProgramName));
+        for_each(kernels.begin(), kernels.end(), WriteCPPKernelWrapper(outSourceFile, outHeaderFile, getProgramName));
 
-        outFile << "#endif" << endl << endl;
+        outHeaderFile << "#endif" << endl << endl;
     }
     else 
     {
-        outFile <<
-            "#include <clu.h>" << endl <<
+        outSourceFile <<
+            "#include \"" << FileName(outHeaderFileName) << ".h\"" << endl << endl;
+
+        outHeaderFile <<
             "#ifndef __" << header.c_str() << endl <<
-            "#define __" << header.c_str() << endl << endl;
+            "#define __" << header.c_str() << endl << endl <<
+            "#include <clu.h>" << endl << endl;
+
+        //outHeaderFile <<
+        //    "#ifdef __cplusplus" << endl <<
+        //    "extern \"C\" {" << endl <<
+        //    "#endif" << endl << endl;
 
         // function to build program from stringified sources
-        outFile <<
+        outSourceFile <<
             "/* This function is shared by all " CLU_PREFIX_CREATE "* functions below */" << endl <<
-            "INLINE cl_program " << getProgramName << "(cl_int* out_pStatus)" << endl <<
+            "cl_program " << getProgramName << "(cl_int* out_pStatus)" << endl <<
             "{" << endl <<
             "    static const char* src[" << sources.size() << "] = {";
+        outHeaderFile <<
+            "/* This function is shared by all " CLU_PREFIX_CREATE "* functions below */" << endl <<
+            "cl_program " << getProgramName << "(cl_int* out_pStatus);" << endl << endl;
 
-        for_each(sources.begin(), sources.end(), WriteSourceString(outFile));
+        for_each(sources.begin(), sources.end(), WriteSourceString(outSourceFile));
 
-        outFile << endl <<
+        outSourceFile << endl <<
             "    };" << endl <<
             "    /* CLU will only build this program the first time */" << endl <<
             "    /* CLU will release this program upon shutdown (cluRelease) */" << endl <<
@@ -960,13 +1042,19 @@ void GenerateWrappers(const string& in_inFileName, const string& in_outFileName,
             "    return program;" << endl <<
             "}" << endl << endl;
 
-        for_each(kernels.begin(), kernels.end(), WriteKernelWrapper(outFile, getProgramName));
+        for_each(kernels.begin(), kernels.end(), WriteKernelWrapper(outSourceFile, outHeaderFile, getProgramName));
 
-        outFile << "#endif" << endl << endl;
+        //outHeaderFile <<
+        //    "#ifdef __cplusplus" << endl <<
+        //    "    }" << endl <<
+        //    "#endif" << endl << endl;
+
+        outHeaderFile << "#endif" << endl << endl;
     }
 
 
-    outFile.close();
+    outSourceFile.close();
+    outHeaderFile.close();
 
     if (g_verbose)
     {
@@ -1002,7 +1090,7 @@ int main(int argc, char *argv[])
 {
     StringList includePaths;
     string inFileName;
-    string outFileName;
+    string outPath;
 
     // process command line
     if (0 == argc)
@@ -1037,7 +1125,7 @@ int main(int argc, char *argv[])
         else if ((!strcmp(argv[arg], "-O")) || (!strcmp(argv[arg], "-o")))
         {
             arg++;
-            outFileName = argv[arg];
+            outPath = argv[arg];
         }
         else if ((!strcmp(argv[arg], "-Q")) || (!strcmp(argv[arg], "-q")))
         {
@@ -1067,16 +1155,11 @@ int main(int argc, char *argv[])
         return -1;
     }
 
-    if (0 == outFileName.size())
-    {
-        outFileName = inFileName + ".h";
-    }
-
     // first path is current path
     includePaths.push_front("");
 
     // open input & output files, write output file
-    GenerateWrappers(inFileName, outFileName, includePaths);
+    GenerateWrappers(inFileName, outPath, includePaths);
 
     return 0;
 }
